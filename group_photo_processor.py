@@ -136,7 +136,12 @@ class GroupPhotoProcessor:
         face_index_to_path = {}
         for i, face_data in enumerate(extracted_faces):
             face_img = face_data['image']
-            # No alignment, just save the crop
+            # Align face if landmarks are available for better embedding quality
+            if face_data.get('landmarks') is not None:
+                aligned = self.align_face(face_img, face_data['landmarks'])
+                if aligned is not None:
+                    face_img = aligned
+            # Save the crop (aligned if possible)
             filename = f"photo{self.global_face_counter}.jpg"
             filepath = os.path.join(self.output_dir, filename)
             face_img.save(filepath, 'JPEG', quality=95, optimize=True, progressive=True)
@@ -171,10 +176,16 @@ class GroupPhotoProcessor:
             if img.size != (160, 160):
                 img = img.resize((160, 160), Image.Resampling.LANCZOS)
             # Convert to tensor and normalize
-            img_tensor = torch.tensor(list(img.getdata()), dtype=torch.float32).view(160, 160, 3).permute(2, 0, 1) / 255.0
+            img_array = np.array(img, dtype=np.float32)
+            img_tensor = torch.from_numpy(img_array).permute(2, 0, 1) / 255.0
+            img_tensor = (img_tensor - 0.5) / 0.5  # match training preprocessing
             img_tensor = img_tensor.unsqueeze(0).to(self._device)
             with torch.no_grad():
                 embedding = self.face_encoder(img_tensor).cpu().numpy().flatten()
+            # Ensure unit length to make cosine similarity meaningful
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
             if len(embedding) != 512 or not np.all(np.isfinite(embedding)):
                 print(f"Invalid embedding for {image_path}")
                 return None
@@ -389,6 +400,10 @@ class GroupPhotoProcessor:
         results = []
         for face_data in extracted_faces:
             face_img = face_data['image']
+            if face_data.get('landmarks') is not None:
+                aligned = self.align_face(face_img, face_data['landmarks'])
+                if aligned is not None:
+                    face_img = aligned
             crop_filename = f"query_face_{uuid.uuid4().hex[:8]}.jpg"
             crop_path = os.path.join(save_dir, crop_filename)
             face_img.save(crop_path, 'JPEG', quality=95, optimize=True, progressive=True)
