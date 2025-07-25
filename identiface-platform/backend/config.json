@@ -1,0 +1,24 @@
+{
+  "api": {
+    "title": "IdentiFace API",
+    "version": "2.0.0",
+    "description": "AI-Powered Face Recognition and Clustering Platform",
+    "host": "0.0.0.0",
+    "port": 8000
+  },
+  "cors": {
+    "origins": ["http://localhost:3000", "http://127.0.0.1:3000"]
+  },
+  "features": {
+    "face_detection": true,
+    "clustering": true,
+    "similarity_search": true,
+    "batch_processing": true
+  },
+  "mock_data": {
+    "clusters": 15,
+    "min_faces_per_cluster": 3,
+    "max_faces_per_cluster": 12,
+    "default_similarity_threshold": 0.6
+  }
+}
