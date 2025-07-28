@@ -5,6 +5,7 @@ import torch
 from facenet_pytorch import MTCNN, InceptionResnetV1
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import DBSCAN
+import faiss
 from tqdm import tqdm
 import pickle
 from collections import defaultdict
@@ -12,7 +13,8 @@ import cv2
 from sklearn.metrics.pairwise import cosine_distances
 
 class GroupPhotoProcessor:
-    def __init__(self, output_dir="group_faces"):
+    def __init__(self, output_dir="group_faces", similarity_threshold=0.8,
+                 distance_threshold=0.7):
         """
         Initialize group photo processor
         
@@ -21,6 +23,9 @@ class GroupPhotoProcessor:
         """
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
+
+        self.similarity_threshold = similarity_threshold
+        self.distance_threshold = distance_threshold
         
         # Initialize models
         # Keep MTCNN's internal min_face_size at a reasonable level, maybe slightly lower than default 20
@@ -28,6 +33,9 @@ class GroupPhotoProcessor:
         # Let's try 40 here.
         self.face_detector = MTCNN(keep_all=True, device='cpu', post_process=False, min_face_size=40) 
         self.face_encoder = InceptionResnetV1(pretrained='vggface2').eval()
+
+        # Faiss index for fast similarity search
+        self.index = None
         
         # Store extracted faces and their embeddings
         self.extracted_faces = []
@@ -331,9 +339,24 @@ class GroupPhotoProcessor:
         with open('face_clusters.json', 'w') as jf:
             json.dump(cluster_json, jf, indent=2)
         print("Cluster assignments saved to face_clusters.json")
+
+        # Build Faiss index for fast similarity search
+        self.build_faiss_index()
+
         return cluster_groups
+
+    def build_faiss_index(self):
+        """Create or update the Faiss index for similarity search"""
+        if self.face_embeddings is None or len(self.face_embeddings) == 0:
+            self.index = None
+            return
+
+        embeddings = self.face_embeddings.astype('float32')
+        faiss.normalize_L2(embeddings)
+        self.index = faiss.IndexFlatIP(embeddings.shape[1])
+        self.index.add(embeddings)
     
-    def find_similar_faces(self, query_image_path, threshold=0.6):
+    def find_similar_faces(self, query_image_path, threshold=None, top_k=10):
         """
         Find faces similar to the query image
         Args:
@@ -345,30 +368,41 @@ class GroupPhotoProcessor:
         if not hasattr(self, 'face_embeddings') or len(self.face_embeddings) == 0:
             print("No face embeddings available. Run clustering first.")
             return []
-        
+
+        if threshold is None:
+            threshold = self.similarity_threshold
+
         # Extract embedding from query image (no landmarks for external query unless provided)
         query_embedding = self.extract_face_embedding(query_image_path)
         if query_embedding is None:
             return []
-        
-        # Calculate similarities
-        similarities = cosine_similarity([query_embedding], self.face_embeddings)[0]
-        
+
+        query_vec = query_embedding.astype('float32')
+        faiss.normalize_L2(query_vec.reshape(1, -1))
+
+        if self.index is not None:
+            scores, indices = self.index.search(query_vec.reshape(1, -1), top_k)
+            similarities = scores[0]
+            idxs = indices[0]
+        else:
+            similarities = cosine_similarity([query_vec], self.face_embeddings)[0]
+            idxs = np.argsort(similarities)[::-1][:top_k]
+
         # Find similar faces
         similar_faces = []
-        for i, similarity in enumerate(similarities):
-            if similarity >= threshold:
-                # The self.extracted_faces list contains ALL detected faces.
-                # self.face_paths and self.face_embeddings only contain faces for which
-                # embedding was successfully extracted.
-                # To get the original_data, we need to match by path.
-                original_data_for_similar_face = next((item for item in self.extracted_faces if item['path'] == self.face_paths[i]), None)
-                
-                similar_faces.append({
-                    'path': self.face_paths[i],
-                    'similarity': similarity,
-                    'original_data': original_data_for_similar_face # Pass the full data
-                })
+        for sim, idx in zip(similarities, idxs):
+            if sim < threshold:
+                continue
+            dist = float(np.linalg.norm(query_vec - self.face_embeddings[idx]))
+            if dist > self.distance_threshold:
+                continue
+            original_data_for_similar_face = next((item for item in self.extracted_faces if item['path'] == self.face_paths[idx]), None)
+            similar_faces.append({
+                'path': self.face_paths[idx],
+                'similarity': float(sim),
+                'distance': dist,
+                'original_data': original_data_for_similar_face
+            })
         
         # Sort by similarity
         similar_faces.sort(key=lambda x: x['similarity'], reverse=True)
