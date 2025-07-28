@@ -1,0 +1,29 @@
+.card {
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 16px;
+    max-width: 400px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    background-color: #fff;
+    font-family: sans-serif;
+}
+.card-header {
+    margin-bottom: 8px;
+}
+.card-title {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+}
+.card-description {
+    margin: 0;
+    font-size: 14px;
+    color: #6b7280;
+}
+.card-content {
+    margin-bottom: 8px;
+}
+.card-footer {
+    font-size: 12px;
+    color: #6b7280;
+}
