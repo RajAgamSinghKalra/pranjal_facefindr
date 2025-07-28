@@ -2,15 +2,17 @@ import os
 import numpy as np
 from PIL import Image
 import torch
-from facenet_pytorch import MTCNN, InceptionResnetV1
-from sklearn.metrics.pairwise import cosine_similarity
+from facenet_pytorch import MTCNN
+from sklearn.metrics.pairwise import cosine_similarity, cosine_distances
 from sklearn.cluster import DBSCAN
 import faiss
 from tqdm import tqdm
 import pickle
 from collections import defaultdict
 import cv2
-from sklearn.metrics.pairwise import cosine_distances
+from insightface.app import FaceAnalysis
+from insightface.model_zoo import get_model
+from insightface.utils import face_align
 
 class GroupPhotoProcessor:
     def __init__(self, output_dir="group_faces", similarity_threshold=0.8,
@@ -27,12 +29,13 @@ class GroupPhotoProcessor:
         self.similarity_threshold = similarity_threshold
         self.distance_threshold = distance_threshold
         
-        # Initialize models
-        # Keep MTCNN's internal min_face_size at a reasonable level, maybe slightly lower than default 20
-        # or closer to 40, as very small internal min_face_size can increase false positives significantly.
-        # Let's try 40 here.
-        self.face_detector = MTCNN(keep_all=True, device='cpu', post_process=False, min_face_size=40) 
-        self.face_encoder = InceptionResnetV1(pretrained='vggface2').eval()
+        # Initialize detectors/encoders
+        # Use insightface for primary detection/embedding and keep MTCNN for additional verification
+        self.insight_app = FaceAnalysis(name='buffalo_l')
+        self.insight_app.prepare(ctx_id=-1, det_size=(640, 640))
+        self.mtcnn = MTCNN(keep_all=True, device='cpu', post_process=False, min_face_size=40)
+        self.rec_model = get_model('buffalo_l')
+        self.rec_model.prepare(ctx_id=-1)
 
         # Faiss index for fast similarity search
         self.index = None
@@ -44,87 +47,62 @@ class GroupPhotoProcessor:
         self.global_face_counter = 1  # Counter for naming faces as photo1, photo2, ...
         
     def detect_and_crop_faces(self, image_path, min_face_size=40):
-        """
-        Helper to load image, detect faces/landmarks, apply all filtering, and crop faces.
-        Returns a list of dicts with face crop and metadata.
-        """
+        """Detect faces using a combination of InsightFace and MTCNN to reduce false positives."""
         try:
-            img = Image.open(image_path).convert('RGB')
-            boxes, probs, landmarks = self.face_detector.detect(img, landmarks=True)
-            if boxes is None or len(boxes) == 0:
+            img_pil = Image.open(image_path).convert('RGB')
+            img_np = np.array(img_pil)
+
+            # Primary detection with InsightFace
+            insight_faces = self.insight_app.get(img_np)
+            if not insight_faces:
                 print(f"No faces detected in {image_path}")
                 return []
+
+            # Secondary detection with MTCNN for verification
+            mtcnn_boxes, mtcnn_probs, _ = self.mtcnn.detect(img_pil, landmarks=False)
+            if mtcnn_boxes is None:
+                mtcnn_boxes = np.empty((0, 4))
+
             extracted_faces = []
-            confidence_threshold = 0.90
-            eye_distance_threshold = 25
-            landmark_margin = 0.0  # Loosened to allow faces with landmarks near the edge
             blur_threshold = 100.0
-            min_face_area = 1600
-            aspect_ratio_range = (0.6, 1.6)
-            for i, (box, prob, landmark) in enumerate(zip(boxes, probs, landmarks)):
-                if prob < confidence_threshold:
-                    print(f"Face {i} from {image_path} below confidence threshold ({prob:.2f}), skipping")
-                    continue
-                x1, y1, x2, y2 = box.astype(int)
+
+            for i, face in enumerate(insight_faces):
+                box = face.bbox.astype(int)
+                x1, y1, x2, y2 = box
                 face_width = x2 - x1
                 face_height = y2 - y1
                 if face_width < min_face_size or face_height < min_face_size:
-                    print(f"Face {i} from {image_path} too small ({face_width}x{face_height}), skipping")
                     continue
-                if face_width * face_height < min_face_area:
-                    print(f"Face {i} from {image_path} area too small ({face_width*face_height}), skipping")
+
+                # Verify detection with MTCNN (IoU check)
+                ious = []
+                for mbox in mtcnn_boxes:
+                    xx1 = max(x1, mbox[0])
+                    yy1 = max(y1, mbox[1])
+                    xx2 = min(x2, mbox[2])
+                    yy2 = min(y2, mbox[3])
+                    inter = max(0, xx2 - xx1) * max(0, yy2 - yy1)
+                    union = (x2 - x1) * (y2 - y1) + (mbox[2] - mbox[0]) * (mbox[3] - mbox[1]) - inter
+                    if union > 0:
+                        ious.append(inter / union)
+                if mtcnn_boxes.size > 0 and (not ious or max(ious) < 0.3):
+                    # MTCNN did not agree with this detection
                     continue
-                if face_width == 0:
-                    print(f"Face {i} from {image_path} has zero width, skipping")
-                    continue
-                aspect_ratio = face_height / face_width
-                if not (aspect_ratio_range[0] < aspect_ratio < aspect_ratio_range[1]):
-                    print(f"Face {i} from {image_path} has unfavorable aspect ratio ({aspect_ratio:.2f}), skipping")
-                    continue
-                if landmark is None:
-                    print(f"Face {i} from {image_path} has missing landmarks, skipping")
-                    continue
-                if landmark.shape != (5, 2):
-                    print(f"Face {i} from {image_path} has invalid landmark shape ({landmark.shape}), skipping")
-                    continue
-                left_eye, right_eye = landmark[0], landmark[1]
-                eye_distance = np.linalg.norm(np.array(left_eye) - np.array(right_eye))
-                if eye_distance < eye_distance_threshold:
-                    print(f"Face {i} from {image_path} eye distance too small ({eye_distance:.1f}), skipping")
-                    continue
-                margin_x = face_width * landmark_margin
-                margin_y = face_height * landmark_margin
-                all_inside = True
-                for (lx, ly) in landmark:
-                    if not (x1 + margin_x < lx < x2 - margin_x and y1 + margin_y < ly < y2 - margin_y):
-                        all_inside = False
-                        break
-                if not all_inside:
-                    print(f"Face {i} from {image_path} has landmarks too close to edge, skipping")
-                    continue
-                face_img = img.crop((x1, y1, x2, y2))
+
+                face_img = img_pil.crop((x1, y1, x2, y2))
                 face_img_cv = np.array(face_img)
-                if face_img_cv.ndim == 3 and face_img_cv.shape[2] == 3:
-                    face_img_gray = cv2.cvtColor(face_img_cv, cv2.COLOR_RGB2GRAY)
-                elif face_img_cv.ndim == 2:
-                    face_img_gray = face_img_cv
-                else:
-                    print(f"Face {i} from {image_path} has unsupported image format for blur check, skipping blur check.")
-                    lap_var = blur_threshold + 1
-                if 'lap_var' not in locals() or lap_var <= blur_threshold:
-                    if face_img_gray.size == 0:
-                        print(f"Face {i} from {image_path} has empty grayscale image, skipping.")
-                        continue
-                    lap_var = cv2.Laplacian(face_img_gray, cv2.CV_64F).var()
-                    if lap_var < blur_threshold:
-                        print(f"Face {i} from {image_path} is too blurry (Laplacian variance {lap_var:.1f}), skipping")
-                        continue
+                face_img_gray = cv2.cvtColor(face_img_cv, cv2.COLOR_RGB2GRAY)
+                lap_var = cv2.Laplacian(face_img_gray, cv2.CV_64F).var()
+                if lap_var < blur_threshold:
+                    continue
+
                 extracted_faces.append({
                     'image': face_img,
                     'box': box,
-                    'landmarks': landmark,
+                    'landmarks': face.kps,
                     'index': i,
-                    'size': (face_width, face_height)
+                    'size': (face_width, face_height),
+                    'embedding': face.embedding
                 })
             print(f"Extracted {len(extracted_faces)} faces from {image_path}")
             return extracted_faces
@@ -161,79 +139,39 @@ class GroupPhotoProcessor:
                 'bounding_box': [int(x) for x in face_data['box']],
                 'landmarks': face_data.get('landmarks', None),
                 'size': face_data['size'],
-                'original_image': base_filename
+                'original_image': base_filename,
+                'embedding': face_data.get('embedding')
             })
             self.global_face_counter += 1
         return saved_paths
     
     def extract_face_embedding(self, image_path, landmarks=None):
-        """
-        Extract face embedding from a single image, with robust error handling and device/model management.
-        """
+        """Extract face embedding using the InsightFace ArcFace model."""
         try:
-            # Device/model caching
-            if not hasattr(self, '_device'):
-                self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                self.face_encoder = InceptionResnetV1(pretrained='vggface2').eval().to(self._device)
-            # Validate image
             if not os.path.exists(image_path):
                 print(f"Image not found: {image_path}")
                 return None
             img = Image.open(image_path).convert('RGB')
-            # Ensure consistent size
-            if img.size != (160, 160):
-                img = img.resize((160, 160), Image.Resampling.LANCZOS)
-            # Convert to tensor and normalize
-            img_array = np.array(img, dtype=np.float32)
-            img_tensor = torch.from_numpy(img_array).permute(2, 0, 1) / 255.0
-            img_tensor = (img_tensor - 0.5) / 0.5  # match training preprocessing
-            img_tensor = img_tensor.unsqueeze(0).to(self._device)
-            with torch.no_grad():
-                embedding = self.face_encoder(img_tensor).cpu().numpy().flatten()
-            # Ensure unit length to make cosine similarity meaningful
+            if landmarks is not None:
+                img = Image.fromarray(face_align.norm_crop(np.array(img), np.array(landmarks)))
+            img = img.resize((112, 112), Image.Resampling.LANCZOS)
+            embedding = self.rec_model.get_feat(np.array(img))
+            if embedding is None:
+                return None
             norm = np.linalg.norm(embedding)
             if norm > 0:
                 embedding = embedding / norm
-            if len(embedding) != 512 or not np.all(np.isfinite(embedding)):
-                print(f"Invalid embedding for {image_path}")
-                return None
             return embedding
         except Exception as e:
             print(f"Error extracting embedding from {image_path}: {e}")
             return None
     
     def align_face(self, img, landmarks):
-        """Align face image using landmarks (eyes, nose, mouth)"""
+        """Align face image using InsightFace utility."""
         try:
-            # Reference points for alignment (from MTCNN paper, 160x160)
-            ref_landmarks = np.array([
-                [38.2946, 51.6963],   # left eye
-                [122.5318, 51.5014],  # right eye
-                [80.0,    92.3655],    # nose
-                [54.0, 133.0356],     # left mouth
-                [108.0, 132.2330]     # right mouth
-            ], dtype=np.float32)
             landmarks = np.array(landmarks, dtype=np.float32)
-            
-            # Compute similarity transform
-            # Check if landmarks are valid (e.g., not all NaN or inf) - already done before calling this function
-            
-            # For robustness, try both default and LMEDS if initial fails.
-            # LMEDS is more robust to outliers but can be slower.
-            # Default method is RANSAC.
-            tfm = None
-            try:
-                tfm = cv2.estimateAffinePartial2D(landmarks, ref_landmarks, method=cv2.RANSAC)[0]
-            except cv2.error as e:
-                # If RANSAC fails, try LMEDS
-                print(f"RANSAC failed, trying LMEDS for alignment: {e}")
-                tfm = cv2.estimateAffinePartial2D(landmarks, ref_landmarks, method=cv2.LMEDS)[0]
-
-            if tfm is not None:
-                aligned_img = cv2.warpAffine(np.array(img), tfm, (160, 160), borderValue=0.0)
-                return Image.fromarray(aligned_img)
-            else:
-                return None
+            aligned = face_align.norm_crop(np.array(img), landmarks)
+            return Image.fromarray(aligned)
         except Exception as e:
             print(f"Error aligning face: {str(e)}")
             return None
@@ -284,10 +222,12 @@ class GroupPhotoProcessor:
         face_paths = []
         temp_extracted_faces_for_clustering = [] 
         for face_data in tqdm(self.extracted_faces, desc="Extracting embeddings"):
-            embedding = self.extract_face_embedding(face_data['path'], landmarks=face_data.get('landmarks'))
+            embedding = face_data.get('embedding')
+            if embedding is None:
+                embedding = self.extract_face_embedding(face_data['path'], landmarks=face_data.get('landmarks'))
             if embedding is not None:
                 embeddings.append(embedding)
-                face_paths.append(face_data['path']) 
+                face_paths.append(face_data['path'])
                 temp_extracted_faces_for_clustering.append(face_data)
                 # Save per-face JSON file
                 landmarks = face_data.get('landmarks', None)
