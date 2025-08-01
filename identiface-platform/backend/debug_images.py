@@ -9,8 +9,9 @@ from pathlib import Path
 import glob
 
 # Same paths as in main.py
-FACE_IMAGES_DIR = Path("/Users/pranjalsharma/Desktop/face recognition copy/group_faces")
-GROUP_PHOTOS_DIR = Path("/Users/pranjalsharma/Desktop/face recognition copy/group_photos")
+ROOT_DIR = Path(__file__).resolve().parents[2]
+FACE_IMAGES_DIR = Path(os.getenv("FACE_IMAGES_DIR", ROOT_DIR / "group_faces"))
+GROUP_PHOTOS_DIR = Path(os.getenv("GROUP_PHOTOS_DIR", ROOT_DIR / "group_photos"))
 
 def check_directories():
     print("🔍 Checking Image Directories...")

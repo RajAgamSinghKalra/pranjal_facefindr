@@ -10,7 +10,8 @@ import glob
 from PIL import Image
 
 # Your exact directory
-FACE_IMAGES_DIR = Path("/Users/pranjalsharma/Desktop/face recognition copy/group_faces")
+ROOT_DIR = Path(__file__).resolve().parents[2]
+FACE_IMAGES_DIR = Path(os.getenv("FACE_IMAGES_DIR", ROOT_DIR / "group_faces"))
 
 def test_cropped_images():
     print("🔍 Testing Cropped Face Images")

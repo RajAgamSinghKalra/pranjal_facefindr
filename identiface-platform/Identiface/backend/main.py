@@ -176,7 +176,8 @@ async def get_clusters():
     """Get all face clusters"""
     try:
         # Load cluster data from JSON file (fallback to database if needed)
-        cluster_file = "/Users/pranjalsharma/Desktop/face recognition copy/face_clusters.json"
+        root_dir = Path(__file__).resolve().parents[2]
+        cluster_file = os.path.join(root_dir, "face_clusters.json")
         
         if os.path.exists(cluster_file):
             with open(cluster_file, 'r') as f:
@@ -345,7 +346,8 @@ async def upload_group_photo(file: UploadFile = File(...)):
     """Upload and process a group photo"""
     try:
         # Save uploaded file
-        upload_dir = "/Users/pranjalsharma/Desktop/face recognition copy/group_photos"
+        root_dir = Path(__file__).resolve().parents[2]
+        upload_dir = os.path.join(root_dir, "group_photos")
         os.makedirs(upload_dir, exist_ok=True)
         
         file_path = os.path.join(upload_dir, f"{uuid.uuid4().hex}_{file.filename}")
@@ -366,7 +368,7 @@ async def upload_group_photo(file: UploadFile = File(...)):
             
             # Save face crop
             face_filename = f"upload_{uuid.uuid4().hex[:8]}.jpg"
-            face_path = os.path.join("/Users/pranjalsharma/Desktop/face recognition copy/group_faces", face_filename)
+            face_path = os.path.join(root_dir, "group_faces", face_filename)
             face_data['image'].save(face_path, 'JPEG', quality=95)
             
             # Insert into database

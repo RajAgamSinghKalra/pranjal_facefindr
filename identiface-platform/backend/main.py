@@ -24,9 +24,12 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# 🎯 YOUR CROPPED FACES DIRECTORY - UPDATE THIS IF NEEDED
-FACE_IMAGES_DIR = Path("/Users/pranjalsharma/Desktop/face recognition copy/group_faces")
-GROUP_PHOTOS_DIR = Path("/Users/pranjalsharma/Desktop/face recognition copy/group_photos")
+# 🎯 Paths to cropped faces and group photos
+# Use environment variables if provided, otherwise default to directories
+# located at the project root.
+ROOT_DIR = Path(__file__).resolve().parents[2]
+FACE_IMAGES_DIR = Path(os.getenv("FACE_IMAGES_DIR", ROOT_DIR / "group_faces"))
+GROUP_PHOTOS_DIR = Path(os.getenv("GROUP_PHOTOS_DIR", ROOT_DIR / "group_photos"))
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)

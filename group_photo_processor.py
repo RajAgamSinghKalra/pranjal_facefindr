@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import numpy as np
 from PIL import Image
 import torch
@@ -428,7 +429,8 @@ def main():
     # Initialize the group photo processor
     processor = GroupPhotoProcessor()
     # Use the updated dataset directory
-    input_directory = "/Users/pranjalsharma/Desktop/face recognition copy/group_photos"
+    root_dir = Path(__file__).resolve().parent
+    input_directory = str(root_dir / "group_photos")
 
     if not os.path.exists(input_directory):
         print(f"Input directory '{input_directory}' not found.")

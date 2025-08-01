@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import os
 from shutil import copyfile
+from pathlib import Path
 
 # --- CONFIGURATION ---
 DB_CONFIG = {
@@ -13,7 +14,8 @@ DB_CONFIG = {
     'host': 'localhost',
     'port': 5432
 }
-QUERY_IMAGE_PATH = '/Users/pranjalsharma/Desktop/face recognition copy/facefindr/static/uploads/query_97fa811b-8c8b-42ae-9f22-efb71e2d6c83.jpg'
+ROOT_DIR = Path(__file__).resolve().parent
+QUERY_IMAGE_PATH = str(ROOT_DIR / 'facefindr' / 'static' / 'uploads' / 'query_97fa811b-8c8b-42ae-9f22-efb71e2d6c83.jpg')
 
 QUERY_CROP_DIR = "query_crops"
 
