@@ -3,6 +3,7 @@ from PIL import Image
 import torch
 import numpy as np
 import psycopg2
+from pathlib import Path
 # Load model
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = InceptionResnetV1(pretrained='vggface2').eval().to(device)
@@ -16,7 +17,8 @@ def get_embedding(image_path):
         embedding = model(img_tensor).cpu().numpy().flatten()
     return embedding
 
-query_image_path = '/Users/pranjalsharma/Desktop/face recognition copy/group_photos/begruessung-outreach-gaeste-4-data.jpg'
+ROOT_DIR = Path(__file__).resolve().parent
+query_image_path = str(ROOT_DIR / 'group_photos' / 'begruessung-outreach-gaeste-4-data.jpg')
 query_embedding = get_embedding(query_image_path)
 print("Query embedding (first 10 values):", query_embedding[:10])
 
