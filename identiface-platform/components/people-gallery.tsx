@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { motion, AnimatePresence } from "framer-motion"
-import { cn } from "@/lib/utils"
+import { cn, normalizeImageUrl } from "@/lib/utils"
 
 interface Face {
   id: string
@@ -197,7 +197,7 @@ export function PeopleGallery({ clusters, onClusterSelect, isLoading, similarity
                           )}
                           <img
                             data-cluster-id={cluster.id}
-                            src={cluster.representative_face.path || "/placeholder.svg"}
+                            src={normalizeImageUrl(cluster.representative_face.path) || "/placeholder.svg"}
                             alt={`Person ${cluster.id}`}
                             className={cn(
                               "w-full h-full object-cover transition-all duration-300",

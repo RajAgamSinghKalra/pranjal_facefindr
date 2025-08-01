@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { motion, AnimatePresence } from "framer-motion"
-import { cn } from "@/lib/utils"
+import { cn, normalizeImageUrl, API_BASE_URL } from "@/lib/utils"
 
 interface Face {
   id: string
@@ -71,11 +71,9 @@ export function SearchResults({ results, isLoading, similarityThreshold, maxResu
   }
 
   const getOriginalPhotoUrl = (face: Face) => {
-    if (face.original_image_path) {
-      const filename = face.original_image_path.split("/").pop() || face.original_image
-      return `http://localhost:8000/api/original-photo/${filename}`
-    }
-    return `http://localhost:8000/api/original-photo/${face.original_image}`
+    const filename =
+      face.original_image_path?.split("/").pop() || face.original_image
+    return `${API_BASE_URL}/api/original-photo/${filename}`
   }
 
   // Filter and limit results based on similarity threshold and max results
@@ -153,7 +151,7 @@ export function SearchResults({ results, isLoading, similarityThreshold, maxResu
                               </div>
                             ) : (
                               <img
-                                src={face.path || "/placeholder.svg"}
+                                src={normalizeImageUrl(face.path) || "/placeholder.svg"}
                                 alt={`Similar face ${face.id}`}
                                 className="w-full h-full object-cover"
                                 onError={() => handleImageError(face.id)}
